@@ -1,0 +1,200 @@
+IMMUNE SYSTEM ODES: 
+S_A(A) = A^nA / (K_A^nA + A^nA)          # antigen-driven stimulation (nA ≥ 1; nA=1 ⇒ Michaelis–Menten)
+S_P(P) = P^nP / (K_P^nP + P^nP)          # PD-L1/exhaustion occupancy
+S_C(C) = C^nC / (K_C^nC + C^nC)          # drug effect (Emax/E50 style)
+S_H(H_i) = H_i / (K_H + H_i)             # patient immune “tone”
+L_X(X)  = 1 − X / K_X                    # optional logistic cap for X∈{E,H,I}
+S_B(B)  = B / (K_B + B)                  # checkpoint blockade exposure/occupancy
+
+dE/dt = E * [ a_E * L_E(E) + b_EA * S_A(A) + a_EHi * S_H(H_i)  − d_EP * S_P(P) ]  −  k_EC * E * S_C(C)
+
+dH/dt = H * [ a_H * L_H(H) + b_HA * S_A(A) − d_HP * S_P(P) − k_HC * S_C(C) 
+              + b_HE * S_A(A) * E / (K_E + E) ]          # (optional CD4–CD8 synergy, saturating)
+
+dI/dt = I * [ a_I * L_I(I) + b_IA * S_A(A) − d_IP * S_P(P) − k_IC * S_C(C) ] 
+        + u_I(t) * (1 − I / K_engraft)                   # cap engraftment to avoid runaway
+
+# Exhaustion / PD-L1 pool (drivers: baseline, antigen, stress; clearance; blockade)
+dP/dt = p_0 + p_H * S_H(H_i) + p_A * S_A(A) + p_C * S_C(C)  −  δ_P * P  −  ρ_blk * S_B(B) * P
+
+CHEMO THERAPY ODES
+
+Parameters:
+u_x(t) = concentration of dosage of treatment at time t
+lambda_x*X = rate of clearance from the body
+
+Adriamycin
+dA/dt = u_a(t) - lamda_a*A 
+Cytoxan
+dC/dt = u_c(t) - lamda_c*C
+Taxol
+dT/dt = u_T(t) - lamda_t*t
+Tamoxifen
+dTam = u_Tam(t) - lamda_tam*Tam
+
+BREAST CANCER TUMOR ODE
+
+- T(t): tumor burden (cells, mm^3, or normalized units)
+- ER(t): ER+ activity (0–1 or normalized score)
+- PR(t): PR+ activity (0–1 or normalized score)
+- Ki67(t): proliferation index (0–1 or fraction)
+- ESR1m(t): ESR1 mutation activity/burden (0–1)
+- PI3K(t): PI3K/AKT/mTOR pathway activation (0–1)
+- ctDNA(t): circulating tumor DNA burden (e.g., ng/mL or normalized)
+
+inputs for carrying capacity
+- BMI(t) or BSA(t)  — either one (normalize to 0–1)
+- VEGF(t)           — angiogenesis proxy (use a saturating transform)
+- Nutrient(t)       — a combined oxygen+glucose supply index (normalize or saturate)
+
+We build a time-varying carrying capacity K(t) from these signals.
+
+Time-varying carrying capacity
+- Normalize each signal to ~[0,1] (z-score or min-max).
+- Define:
+  K(t) = K0 * [ 1 + w_BMI * BMI_hat(t) + w_VEGF * sat_VEGF(VEGF(t)) + w_N * sat_N(Nutrient(t)) ]
+
+Notes:
+- sat_VEGF(z) or sat_N(z) can be z / (K + z) to avoid runaway.
+
+## Modeling style
+We use a generalized Lotka–Volterra structure: each variable’s rate = (itself) * (intrinsic rate + interactions) + optional source/sink.
+Keep parameters nonnegative where biologically sensible, and clamp fraction-like states (ER, PR, Ki67, ESR1m, PI3K) to [0,1] in code.
+
+---
+
+## ODEs 
+
+### Tumor burden
+dotT = T * [
+    r_T
+  + a_T_Ki67 * Ki67
+  + a_T_ER   * ER
+  + a_T_PR   * PR
+  + a_T_ESR1m* ESR1m
+  + a_T_PI3K * PI3K
+  - (beta_T * T / K(t))  # logistic crowding with time-varying K(t)
+]
+
+### ER activity
+dotER = ER * ( r_ER + a_ER_T * T - d_ER ) + c_ER_from_PR * PR * (1 - ER)
+
+### PR activity
+dotPR = PR * ( r_PR + a_PR_T * T - d_PR ) + c_PR_from_ER * ER * (1 - PR)
+
+### Ki-67 proliferation index
+dotKi67 = Ki67 * ( r_Ki + a_Ki_T * T + a_Ki_PI3K * PI3K - d_Ki )
+
+### ESR1 mutation activity/burden
+dotESR1m = ESR1m * ( r_Em + a_Em_T * T - d_Em ) + s_Em_from_ctDNA * ctDNA * (1 - ESR1m)
+
+### PI3K pathway activation
+dotPI3K = PI3K * ( r_P + a_P_T * T - d_P ) + a_P_from_ER * ER * (1 - PI3K)
+
+### ctDNA burden
+dotctDNA = q_T * T + q_Em * ESR1m * T - delta_ct * ctDNA
+
+---
+
+## What each term means 
+- r_*: intrinsic net change when isolated (per-time).
+- a_*_*: interaction coefficients (positive increases, negative decreases).
+- d_*: decay/turnover toward baseline.
+- c_*_from_*: cross-talk between biomarkers; (1 - x) keeps fraction-like variables in [0,1].
+- q_T, q_Em: ctDNA production from total tumor and ESR1m-driven resistant clones.
+- delta_ct: ctDNA clearance.
+- beta_T: strength of logistic self-limitation via K(t).
+- K(t): capacity supply from BMI/BSA, VEGF, Nutrient; prevents unrealistic growth.
+
+## Practical notes
+- Bounding: clamp ER, PR, Ki67, ESR1m, PI3K to [0,1] each integration step or keep the (1 - x) terms.
+- Therapy hooks (optional for later): endocrine therapy can reduce a_T_ER and a_T_PR; PI3K inhibitors reduce a_T_PI3K or increase d_P; chemo can be added as extra death terms on T and as modifiers on biomarkers.
+
+TOXCICITY ODE
+- Let D_k(t) be drug exposures (e.g., plasma conc. from PK), one per agent k.
+- For each D_k, a one-compartment PK is enough to start:
+  dD_k/dt = -k_elim_k * D_k + u_k(t)
+  where u_k(t) is the dosing input (bolus or infusion), k_elim_k = ln(2) / t_half_k.
+
+- Use saturating "toxicity drive" from each drug:
+  tox_k(D_k) = Emax_k * D_k / (EC50_k + D_k)
+  (You can add Hill>1 later if needed.)
+
+- Recovery terms pull biomarkers back toward baseline; damage terms push them away.
+
+
+----------------------------------------------------------------
+OPTION B — 4-biomarker toxicity model (interpretable/reusable)
+----------------------------------------------------------------
+States (with suggested ranges):
+- x_cardiac(t)  in [0,1]  (cardiac damage score; 0 none, 1 severe)
+- x_neut(t)     in [0,1]  (normalized neutrophil count; 1 healthy, 0 profoundly low)
+- x_immune(t)   in [0,1]  (immune competence; 1 healthy, 0 severely compromised)
+- x_neuro(t)    in [0,1]  (neuropathy severity; 0 none, 1 severe)
+
+Drug-specific drives:
+- For each drug k, define coefficients on each biomarker: 
+  w_k_card, w_k_neut, w_k_imm, w_k_neuro >= 0.
+- tox_k(D_k) as above.
+
+Couplings you may want:
+- Immune ↔ neutrophils: neutropenia tends to reduce immune competence.
+- Neuropathy accumulates slowly and recovers slowly.
+- Cardiac injury is often cumulative with slow repair.
+
+Equations (ASCII, per-time units):
+
+1) Cardiac damage score (higher is worse)
+dotx_cardiac = ( sum_k w_k_card * tox_k(D_k) ) 
+               + w_card_accum * x_cardiac * (1 - x_cardiac)   # cumulative stress
+               - r_card_rec * x_cardiac
+
+2) Neutrophil fraction (higher is better)
+dotx_neut = - ( sum_k w_k_neut * tox_k(D_k) ) * x_neut        # loss scales with current pool
+            + r_neut_rec * (1 - x_neut)                       # marrow recovery towards 1
+
+3) Immune competence (higher is better)
+dotx_immune = - ( sum_k w_k_imm * tox_k(D_k) ) * x_immune
+              + r_imm_rec * (1 - x_immune)
+              + c_neut_to_imm * (x_neut - x_immune)           # neutrophils support immune tone
+
+4) Neuropathy severity (higher is worse)
+dotx_neuro = ( sum_k w_k_neuro * tox_k(D_k) )
+             + w_neuro_accum * x_neuro * (1 - x_neuro)        # slow accumulation
+             - r_neuro_rec * x_neuro
+
+Bounding/implementation:
+- After each step, clamp states to valid ranges:
+  x_cardiac = min(max(x_cardiac, 0), 1), etc.
+- Start with small w_accum terms; set to 0 initially if unstable.
+
+Optional aggregate readouts
+------------------------------------------------------------
+- Overall toxicity index for dashboards:
+  Xtox = v_card*x_cardiac + v_neut*(1 - x_neut) 
+         + v_imm*(1 - x_immune) + v_neuro*x_neuro
+  (Choose v_* to reflect clinical priorities.)
+- Grade triggers (pseudo-CTCAE):
+  if x_neut < 0.5 -> "Grade ≥3 neutropenia risk"
+  if x_cardiac > 0.3 rising -> "Cardiac monitoring"
+  if x_neuro > 0.4 -> "Neuropathy dose-hold candidate"
+
+------------------------------------------------------------
+Calibration tips
+------------------------------------------------------------
+- Map x_neut to ANC: x_neut ≈ clamp( ANC / ANC_baseline , 0, 1 ).
+- Map x_cardiac to troponin/EF: choose a monotone transform to [0,1].
+- x_immune can be composite (lymphocytes, CD4/CD8 ratio, clinical judgement).
+- x_neuro can be symptom score or exam-based scale normalized to [0,1].
+- Start with one drug and one biomarker to verify signs/magnitudes; then expand.
+
+------------------------------------------------------------
+Minimal parameter set (per biomarker)
+------------------------------------------------------------
+- Recovery: r_card_rec, r_neut_rec, r_imm_rec, r_neuro_rec
+- Accumulation (optional): w_card_accum, w_neuro_accum
+- Drug weights per biomarker: w_k_card, w_k_neut, w_k_imm, w_k_neuro
+- PK: t_half_k (or k_elim_k), EC50_k, Emax_k for each drug k
+- Cross-talk: c_neut_to_imm
+
+
