@@ -1,0 +1,43 @@
+{
+     "timezone": "America/Chicago",
+     "decision_making_interval" : 7,
+      "state_signals": [
+    {"name":"T", "source":"state.T"},
+    {"name":"ANC", "source":"state.x_neut"},
+    {"name":"Cardiac", "source":"state.x_cardiac"},
+    {"name":"Immune", "source":"state.x_immune"}
+  ],
+  "drugs": [
+    {"id":"Adr", "label":"Doxorubicin", "unit":"mg_per_m2", "route":"IV", "infusion_hours":1.0,
+     "cumulative_cap_mg_per_m2": 450
+    },
+    {"id":"Cyc", "label":"Cyclophosphamide", "unit":"mg_per_m2", "route":"IV", "infusion_hours":1.0},
+    {"id":"Tax", "label":"Paclitaxel", "unit":"mg_per_m2", "route":"IV", "infusion_hours":1.0},
+    {"id":"Tam", "label":"Tamoxifen", "unit":"mg_per_day", "route":"PO"}
+  ],
+  "policy": {
+    "type": "rule_ladder",
+    "episodes":[
+        {
+            "name": "AC_phase",
+            "start_day": 0,
+            "max_weeks":8,
+            "on_enter": [
+               {"set": {"Adr.weekly": [60,60,60]}},
+               {"set": {"cyc.weekely": [600,600,600]}}
+            ],
+            "rules": [
+            {"if":"ANC < 0.5", "then":[{"hold":["Adr","Cyc",7]}, {"add":"GCSF"}]},
+            {"if":"0.5 <= ANC && ANC < 1.0", "then":[{"reduce":{"Adr":0.75,"Cyc":0.75}}]},
+            {"if":"ardiac > 0.6", "then":[{"reduce":{"Adr":0.5}}, {"note":"cardiac toxicity concern"}]},
+            {"if":"T_reduction_2w < 0.1", "then":[{"escalate":{"Adr":1.1, "Cyc":1.05}, "cap_change_pct":0.15}]}
+            ],
+            "safety": [
+                {}
+            ]
+
+
+        }
+    ]
+  }
+}
