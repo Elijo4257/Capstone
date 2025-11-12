@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.2",
+  "mode": "CONTROL_OPTIMIZATION",
+
+  "patient_id": "Jane",
+  "time_anchor_utc": "2025-10-01T00:00:00Z",
+
+  "tgrid": { "start_day": 0, "num_days": 365, "step_days": 1 },
+
+  "covariates": {
+    "age_years": 54,
+    "sex": "F",
+    "height_cm": 167,
+    "weight_kg": 78.0,
+    "BMI": 27.96,
+    "BSA_m2": 1.88,
+    "renal_function": "normal",
+    "hepatic_function": "normal",
+    "ER_status": "positive",
+    "PR_status": "positive",
+    "HER2_status": "negative"
+  },
+
+  "initial_conditions": {
+    "T": 0.18,
+    "E": 0.30,
+    "Ki67": 0.42,
+    "ESR1m": 0.06,
+    "PI3K": 0.12,
+    "ctDNA": 0.03,
+    "ER": 0.5,
+    "PR": 0.5,
+    "H": 0.5,
+    "PD-L1": 0.5,
+
+    "Adr": 0.0,
+    "Cyc": 0.0,
+    "Tax": 0.0,
+    "Tam": 0.0,
+    "IO": 0.5,
+    "TIL": 0.0,
+
+    "x_cardiac": 1.0,
+    "x_immune": 1.0,
+    "x_neut": 1.0,
+    "x_neuro": 1.0
+  },
+
+  "control_spec": {
+    "type": "policy",
+    "mode": "closed_loop",
+    "channels": ["Adr", "Cyc", "Tax", "Tam", "IO", "TIL"],
+
+    "policy": {
+      "form": "affine_sigmoid",
+      "state_inputs": ["T", "E", "Ki67", "ctDNA"],
+      "time_feature": true,
+      "shared_weights": false,
+      "init_scale": 0.1
+    },
+
+    "bounds": {
+      "per_step": {
+        "Adr": [0.0, 1.0],
+        "Cyc": [0.0, 1.0],
+        "Tax": [0.0, 1.0],
+        "Tam": [0.0, 1.0],
+        "IO":  [0.0, 0.5],
+        "TIL": [0.0, 0.5]
+      },
+
+      "cumulative": {
+        "Adr": 30.0,
+        "Cyc": 30.0,
+        "Tax": 30.0,
+        "Tam": 30.0,
+        "IO":  30.0,
+        "TIL": 30.0
+      }
+    },
+
+    "actuation": {
+      "allowed_days": "all",
+      "min_gap_days": {
+        "Adr": 6,
+        "Cyc": 6,
+        "Tax": 6,
+        "Tam": 0,
+        "IO":  0,
+        "TIL": 13
+      }
+    },
+
+    "regularization": {
+      "l2_on_u": 0.01,
+      "tv_on_u": 0.02,
+      "slack_penalty": 10.0
+    }
+  },
+
+  "objective": {
+    "terms": [
+      { "name": "final_tumor",      "weight": 1.0,  "metric": "T_final" },
+      { "name": "immune_toxicity",  "weight": 0.3,  "metric": "E_nadir_target_minus", "target": 0.5 },
+      { "name": "dose_burden",      "weight": 0.01, "metric": "L2_u" },
+      { "name": "dose_smoothness",  "weight": 0.02, "metric": "TV_u" }
+    ],
+    "risk": { "robust": false, "percentile": 0.9 }
+  },
+
+  "measurement_plan": {
+    "simulate_only": true,
+    "states_to_record": ["T", "E", "Ki67", "ctDNA", "Adr", "Cyc", "Tax", "Tam", "IO", "TIL", "x_cardiac", "x_immune", "x_neut", "x_neuro"],
+    "sampling_days": "all"
+  },
+
+  "notes": "No fixed dosing. A closed-loop policy π_theta(x,t) selects per-channel doses within bounds; penalties encourage tumor control with limited toxicity and smooth dosing."
+}
