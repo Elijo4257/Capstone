@@ -1,0 +1,27 @@
+so to being we take the patient information
+then we take the inital conditions for what we plan on tracking
+then we define a control spec - this tell us how to design our treatment plan 
+    policy -> dosing schedule will be learnable 
+    closed loop -> we continuously observe patient state
+    chanel-> drugs we need to track
+
+then we define our policy
+    affine sidmoid -> ensures values are smoothly bounded, doesn't need harcore clippling
+    state inputs -> terms we use to define out optimization algorithm
+
+then we deine bounds
+    this gives is harcore bounds that prevent extremely toxic treatment to be administered to the patient
+
+then we deine cumulative
+    what this does is day that over the entire treatment schedule, the amount of a drug cannot go over this amount for safety reasons
+
+"actuation"
+    this defines the days during treatment where we can give treatment and days where we can't in order to let the immune system recovery
+
+"regularization"
+    l2_on_u -> dose burden pentalty
+    tv_on_u -> u[t]-u[t-1] (smoothness)
+    slack_penalty -> weight of the penalty if limits are violated 
+
+optimization
+    establishes the goals we want to optimize in out research

@@ -1,0 +1,343 @@
+#Revised ODEs
+
+content = r"""
+Title: Resource-Limited Tumor–Immune–Drug ODE System Aligned with model.json (states = {T,E,H,PDL1,TGFb,ctDNA,Adr,Cyc,Tax,Tam,IO,TIL,N,BM})
+Version: 2025-11-23
+
+--------------------------------------------------------------------------------
+PHILOSOPHY & MODULES
+--------------------------------------------------------------------------------
+Goal: Provide a mechanistic-but-compact ODE system that:
+
+- Uses exactly the state list in model.json/patient_information.json:
+    T, E, H, PDL1, TGFb, ctDNA,
+    Adr, Cyc, Tax, Tam, IO, TIL,
+    N, BM
+- Uses parameter names consistent with model.json (rT_max, k_ET, K_ET, ...).
+- Encodes "resource-limited" tumor/immune growth (via N and BM).
+- Includes:
+    • Immune kill of tumor (E kills T).
+    • Chemo kill of tumor (Adr/Cyc/Tax via Emax PD).
+    • Tamoxifen modulation of tumor.
+    • IO checkpoint blockade (PD-L1) and immune boost.
+    • TGF-β as immunosuppressive factor secreted by tumor.
+    • ctDNA as a linear tumor proxy with clearance.
+    • Myelosuppression and recovery via BM, chemo, IO, TIL.
+- Is suitable as a "teacher" model to generate synthetic x_data(t) over the same state vector your learning model uses.
+
+This is a descriptive spec, not executable code; you will implement these equations in your automatic_diff_ode.ipynb using the same parameter names.
+
+--------------------------------------------------------------------------------
+STATE VARIABLES (all appear in model.json["states"])
+--------------------------------------------------------------------------------
+T      : Tumor burden (normalized, e.g. 0–1 or scaled)
+E      : Cytotoxic effector immune (e.g. CD8/NK), normalized density
+H      : Helper/supportive immune (e.g. CD4/others), normalized density
+PDL1   : PD-L1 / exhaustion axis, 0–1
+TGFb   : Immunosuppressive TGF-β signal, 0–1 (or normalized)
+ctDNA  : Circulating tumor DNA, normalized (0–1)
+
+Adr    : Adriamycin/Doxorubicin concentration (plasma / effect compartment)
+Cyc    : Cyclophosphamide concentration
+Tax    : Paclitaxel/Taxol concentration
+Tam    : Tamoxifen concentration
+IO     : Checkpoint inhibitor (e.g. anti–PD1/PD-L1) level
+TIL    : Tumor-infiltrating lymphocyte therapy (adoptive cells / CAR-T proxy)
+
+N      : Generic nutrient / metabolic resource pool
+BM     : Bone marrow reserve (0–1; 1 = healthy, 0 = fully suppressed)
+
+All states with intended bounds [0,1] (PDL1, TGFb, ctDNA, N, BM, and T if normalized) should be clamped to [0,1] after each integration step in code.
+
+--------------------------------------------------------------------------------
+PARAMETERS (names aligned with model.json; only roles/interpretations summarized)
+--------------------------------------------------------------------------------
+Tumor and immune interactions:
+  rT_max       : Max tumor proliferation rate (1/day)
+  k_ET         : Immune kill coefficient (E killing T)
+  K_ET         : Half-sat for immune kill vs tumor
+  k_PDboost_T  : PD-L1/immune-escape boost to tumor net growth
+
+Endocrine / Tamoxifen:
+  k_Tam_ERPR   : Effective Tam-induced reduction in tumor growth (lumps ER/PR effects)
+  K_Tam        : Tam half-saturation (EC50-like)
+
+Immune proliferation and turnover:
+  rE_max       : Max E proliferation under full BM / nutrients
+  rH_max       : Max H proliferation under full BM / nutrients
+  delta_E      : E turnover/exhaustion
+  delta_H      : H turnover
+
+Antigen-driven stimulation and helper boost:
+  k_T_to_E     : T → E antigen-driven stimulation (MM)
+  K_Tstim_E    : Half-sat T→E
+  k_T_to_H     : T → H stimulation (MM)
+  K_Tstim_H    : Half-sat T→H
+  k_H_to_E     : H → E helper boost
+  K_Hboost_E   : Half-sat H→E boost
+
+PD-L1 dynamics:
+  PDL1_basal   : Basal PD-L1 drive
+  k_PDL1_up_T  : Tumor-driven PD-L1 upregulation
+  K_PDL1_up_T  : Half-sat for T-driven PD-L1
+  k_PDL1_up_E  : Effector-driven PD-L1 upregulation
+  K_PDL1_up_E  : Half-sat for E-driven PD-L1
+  k_PDL1_decay : PD-L1 decay
+  K_PDL1       : Half-sat for PD-L1 effect
+  n_PDL1       : Hill coefficient for PD-L1
+  k_IO_block_PDL1 : IO-driven PD-L1 blockade/normalization
+
+Immune checkpoint therapy and TIL:
+  K_IO         : IO EC50-like half-sat
+  n_IO         : Hill for IO effect
+  gamma_IO     : IO immune stimulation factor (multiplier on E growth)
+  K_TIL        : Half-sat for TIL signal
+  gamma_BM_TIL : TIL boost to BM recovery
+
+TGF-β module:
+  k_T_secrete_TGFb : TGF-β secretion rate per unit tumor
+  k_TGFb_decay     : TGF-β decay/clearance
+  K_TGFb           : Half-sat for TGF-β immunosuppression
+  n_TGFb           : Hill for TGF-β suppression
+  phi_TGFb         : Strength of TGF-β-mediated suppression of immune proliferation
+
+Nutrient and BM:
+  sN          : Nutrient supply rate
+  dN          : Nutrient washout/decay
+  K_N_prolif  : Half-sat for immune/tumor growth vs N
+  K_N_use_T   : Half-sat for N usage by T
+  K_N_use_E   : Half-sat for N usage by E
+  chi_N_chemo : Chemo-induced nutrient depletion strength
+
+  sBM         : BM supply/recovery baseline
+  dBM         : BM baseline decay
+  qBM_chemo   : Myelosuppression by chemo
+  K_BM        : Half-sat for immune growth vs BM
+  n_BM        : Hill for immune growth vs BM
+  gamma_BM_IO : IO boost to BM recovery
+
+ctDNA:
+  p_ct        : ctDNA shedding per unit tumor
+  k_ctclr     : ctDNA clearance
+
+Chemo PD (tumor kill):
+  Emax_Adr    : Max fractional kill per day from Adr at high exposure
+  EC50_Adr    : Adr EC50
+  n_Adr       : Adr Hill 
+  Emax_Cyc    : Max fractional kill per day from Cyc
+  EC50_Cyc    : Cyc EC50
+  n_Cyc       : Cyc Hill
+  Emax_Tax    : Max fractional kill per day from Tax
+  EC50_Tax    : Tax EC50
+  n_Tax       : Tax Hill
+
+PK decay:
+  lambda_Adr  : Adr decay (1/day)
+  lambda_Cyc  : Cyc decay (1/day)
+  lambda_Tax  : Tax decay (1/day)
+  lambda_Tam  : Tam decay (1/day)
+  lambda_IO   : IO decay (1/day)
+  lambda_TIL  : TIL decay (1/day)
+
+--------------------------------------------------------------------------------
+HELPER FUNCTIONS AND NOTATION
+--------------------------------------------------------------------------------
+Define standard Hill/saturation functions:
+
+  Hill(x; K, n)  = x^n / (K^n + x^n + eps)         (eps small > 0)
+  Sat(x; K)      = x / (K + x + eps)
+  Sat01(z)       = clamp(z, 0, 1)                  # applied in implementation
+
+Effective nutrient and BM factors (for immune/tumor growth):
+
+  g_N(N)     = Sat(N; K_N_prolif)
+  g_BM(BM)   = (BM^n_BM) / (K_BM^n_BM + BM^n_BM + eps)
+
+TGF-β suppression factor (0–1):
+
+  g_TGFb(TGFb) = Hill(TGFb; K_TGFb, n_TGFb)
+
+Chemo exposure and PD (tumor-directed):
+
+  S_Adr(Adr) = Emax_Adr * Hill(Adr; EC50_Adr, n_Adr)
+  S_Cyc(Cyc) = Emax_Cyc * Hill(Cyc; EC50_Cyc, n_Cyc)
+  S_Tax(Tax) = Emax_Tax * Hill(Tax; EC50_Tax, n_Tax)
+
+  S_chemo    = S_Adr(Adr) + S_Cyc(Cyc) + S_Tax(Tax)
+
+IO and PD-L1 functional signals:
+
+  S_IO(IO)      = Hill(IO; K_IO, n_IO)
+  S_PDL1(PDL1)  = Hill(PDL1; K_PDL1, n_PDL1)
+
+--------------------------------------------------------------------------------
+EFFECTIVE RATES (INTUITION)
+--------------------------------------------------------------------------------
+- Tumor reproduces with maximum rate rT_max, modulated by:
+    • nutrient availability    g_N(N)
+    • immune escape via PD-L1 (1 + k_PDboost_T * S_PDL1(PDL1))
+    • resource limitation in T itself (we use simple logistic 1 - T if T is normalized)
+- Tumor is killed by:
+    • effector immune E via MM term (E,T,K_ET)
+    • chemo (S_chemo)
+    • tamoxifen (Sat(Tam;K_Tam) with strength k_Tam_ERPR)
+
+- Effector immune E proliferates with rate rE_max, scaled by:
+    • nutrients g_N(N)
+    • BM reserve g_BM(BM)
+    • TGF-β suppression (1 - phi_TGFb * g_TGFb(TGFb))
+    • IO boost gamma_IO * S_IO(IO)
+    • antigen (T) and helper (H) stimulation (k_T_to_E, k_H_to_E)
+  and dies by turnover delta_E plus PD-L1–driven exhaustion.
+
+- Helper immune H proliferates similarly, but without IO boost and with its own rH_max, delta_H.
+
+- TGF-β is secreted by tumor and cleared.
+- PD-L1 is driven by tumor and immune activation, cleared, and neutralized by IO.
+- ctDNA is proportional to tumor burden with first-order clearance.
+- N is supplied, consumed by T/E, and depleted by chemo.
+- BM is supplied, decays, suppressed by chemo, and supported by IO and TIL.
+
+--------------------------------------------------------------------------------
+ODE SYSTEM
+--------------------------------------------------------------------------------
+For compactness, write:
+
+  gN   = g_N(N)
+  gBM  = g_BM(BM)
+  gTGF = g_TGFb(TGFb)
+  SP   = S_PDL1(PDL1)
+  SIO  = S_IO(IO)
+
+  SAdr = S_Adr(Adr)
+  SCyc = S_Cyc(Cyc)
+  STax = S_Tax(Tax)
+  Schemo = SAdr + SCyc + STax
+
+1) Tumor burden T
+------------------
+Resource-limited growth, boosted by PD-L1 immune escape, killed by E, chemo, and Tam:
+
+  dT/dt =
+      + rT_max * gN * (1 + k_PDboost_T * SP) * T * (1 - T)
+      - k_ET * (E * T) / (K_ET + T + eps)
+      - Schemo * T
+      - k_Tam_ERPR * Sat(Tam; K_Tam) * T
+
+If T is not normalized, replace (1 - T) by (1 - T / K_T) and define K_T elsewhere.
+
+2) Effector immune E
+---------------------
+Proliferation with nutrient and BM limitation, TGF-β suppression, IO boost;
+stimulation from T and H; exhaustion from PD-L1:
+
+  Stim_E_from_T = k_T_to_E * Sat(T; K_Tstim_E) * E
+  Stim_E_from_H = k_H_to_E * Sat(H; K_Hboost_E) * E
+
+  Growth_base   = rE_max * gN * gBM * (1 - phi_TGFb * gTGF) * (1 + gamma_IO * SIO) * E
+  Loss_base     = delta_E * (1 + SP) * E    # PD-L1-dependent exhaustion
+
+  dE/dt =
+      + Growth_base
+      + Stim_E_from_T
+      + Stim_E_from_H
+      - Loss_base
+
+3) Helper immune H
+-------------------
+Similar to E but without IO boost and without PD-L1 exhaustion term (for simplicity):
+
+  Stim_H_from_T = k_T_to_H * Sat(T; K_Tstim_H) * H
+  Growth_H      = rH_max * gN * gBM * (1 - phi_TGFb * gTGF) * H
+  Loss_H        = delta_H * H
+
+  dH/dt =
+      + Growth_H
+      + Stim_H_from_T
+      - Loss_H
+
+4) PD-L1 / exhaustion axis PDL1
+-------------------------------
+Driven by tumor and effector activation; IO blocks it; simple linear decay:
+
+  dPDL1/dt =
+      + PDL1_basal
+      + k_PDL1_up_T * Sat(T; K_PDL1_up_T)
+      + k_PDL1_up_E * Sat(E; K_PDL1_up_E)
+      - k_PDL1_decay * PDL1
+      - k_IO_block_PDL1 * SIO * PDL1
+
+Clamp PDL1 to [0,1] after each integration step.
+
+5) TGF-β immunosuppressive signal
+---------------------------------
+Tumor-secreted, first-order clearance:
+
+  dTGFb/dt =
+      + k_T_secrete_TGFb * T
+      - k_TGFb_decay * TGFb
+
+Clamp TGFb to [0,1] if normalized.
+
+6) ctDNA
+--------
+Linear production from tumor burden and clearance:
+
+  dctDNA/dt =
+      + p_ct * T
+      - k_ctclr * ctDNA
+
+7) Nutrient pool N
+------------------
+Supplied at rate sN, washed out, consumed by tumor and effector immune, 
+and depleted by chemo:
+
+  Tumor_use = N * T / (K_N_use_T + T + eps)
+  Eff_use   = N * E / (K_N_use_E + E + eps)
+
+  dN/dt =
+      + sN
+      - dN * N
+      - Tumor_use
+      - Eff_use
+      - chi_N_chemo * Schemo * N
+
+Clamp N to [0,1] if used as normalized resource.
+
+8) Bone marrow reserve BM
+-------------------------
+Supplied and decays, suppressed by chemo, supported by IO and TIL:
+
+  Support_IO  = gamma_BM_IO  * SIO       * (1 - BM)
+  Support_TIL = gamma_BM_TIL * Sat(TIL; K_TIL) * (1 - BM)
+
+  dBM/dt =
+      + sBM
+      - dBM * BM
+      - qBM_chemo * Schemo * BM
+      + Support_IO
+      + Support_TIL
+
+Clamp BM to [0,1].
+
+9) Drug PK: Adr, Cyc, Tax, Tam, IO, TIL
+---------------------------------------
+Each drug is one-compartment first-order with external input u_Drug(t):
+
+  dAdr/dt = u_Adr(t) - lambda_Adr * Adr
+  dCyc/dt = u_Cyc(t) - lambda_Cyc * Cyc
+  dTax/dt = u_Tax(t) - lambda_Tax * Tax
+  dTam/dt = u_Tam(t) - lambda_Tam * Tam
+  dIO/dt  = u_IO(t)  - lambda_IO  * IO
+  dTIL/dt = u_TIL(t) - lambda_TIL * TIL
+
+Here u_Adr, u_Cyc, u_Tax, u_Tam, u_IO, u_TIL are the control channels defined in model.json["control_spec"]["channels"].
+
+--------------------------------------------------------------------------------
+NOTES FOR IMPLEMENTATION IN automatic_diff_ode.ipynb
+--------------------------------------------------------------------------------
+- Implement the helper functions Hill, Sat, g_N, g_BM, g_TGFb exactly once, with small eps for numerical stability.
+- Use the same parameter names as model.json so you can index them directly from the JSON config.
+- Ensure states that should remain in [0,1] are clamped or softly projected after each integration step.
+- Use this system as your "teacher" ODE f_teacher(x, p, t) to generate x_data(t) for term discovery and parameter learning.
+"""

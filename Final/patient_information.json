@@ -22,28 +22,22 @@
   },
 
   "initial_conditions": {
-    "T": 0.18,
+    "T": 0.30,
     "E": 0.30,
-    "Ki67": 0.42,
-    "ESR1m": 0.06,
-    "PI3K": 0.12,
+    "H": 0.50,
+    "PDL1": 0.50,
+    "TGFb": 0.00,
     "ctDNA": 0.03,
-    "ER": 0.5,
-    "PR": 0.5,
-    "H": 0.5,
-    "PD-L1": 0.5,
 
-    "Adr": 0.0,
-    "Cyc": 0.0,
-    "Tax": 0.0,
-    "Tam": 0.0,
-    "IO": 0.5,
-    "TIL": 0.0,
+    "Adr": 0.00,
+    "Cyc": 0.00,
+    "Tax": 0.00,
+    "Tam": 0.00,
+    "IO":  0.00,
+    "TIL": 0.00,
 
-    "x_cardiac": 1.0,
-    "x_immune": 1.0,
-    "x_neut": 1.0,
-    "x_neuro": 1.0
+    "N": 0.50,
+    "BM": 0.80
   },
 
   "control_spec": {
@@ -53,7 +47,7 @@
 
     "policy": {
       "form": "affine_sigmoid",
-      "state_inputs": ["T", "E", "Ki67", "ctDNA"],
+      "state_inputs": ["T", "E", "H", "PDL1", "ctDNA", "N", "BM"],
       "time_feature": true,
       "shared_weights": false,
       "init_scale": 0.1
@@ -68,7 +62,6 @@
         "IO":  [0.0, 0.5],
         "TIL": [0.0, 0.5]
       },
-
       "cumulative": {
         "Adr": 30.0,
         "Cyc": 30.0,
@@ -100,19 +93,23 @@
 
   "objective": {
     "terms": [
-      { "name": "final_tumor",      "weight": 1.0,  "metric": "T_final" },
-      { "name": "immune_toxicity",  "weight": 0.3,  "metric": "E_nadir_target_minus", "target": 0.5 },
-      { "name": "dose_burden",      "weight": 0.01, "metric": "L2_u" },
-      { "name": "dose_smoothness",  "weight": 0.02, "metric": "TV_u" }
+      { "name": "final_tumor",     "weight": 1.0,  "metric": "T_final" },
+      { "name": "immune_toxicity", "weight": 0.3,  "metric": "E_nadir_target_minus", "target": 0.5 },
+      { "name": "dose_burden",     "weight": 0.01, "metric": "L2_u" },
+      { "name": "dose_smoothness", "weight": 0.02, "metric": "TV_u" }
     ],
     "risk": { "robust": false, "percentile": 0.9 }
   },
 
   "measurement_plan": {
     "simulate_only": true,
-    "states_to_record": ["T", "E", "Ki67", "ctDNA", "Adr", "Cyc", "Tax", "Tam", "IO", "TIL", "x_cardiac", "x_immune", "x_neut", "x_neuro"],
+    "states_to_record": [
+      "T", "E", "H", "PDL1", "TGFb", "ctDNA",
+      "Adr", "Cyc", "Tax", "Tam", "IO", "TIL",
+      "N", "BM"
+    ],
     "sampling_days": "all"
   },
 
-  "notes": "No fixed dosing. A closed-loop policy π_theta(x,t) selects per-channel doses within bounds; penalties encourage tumor control with limited toxicity and smooth dosing."
+  "notes": "Aligned to resource-limited model: uses {T,E,H,PDL1,TGFb,ctDNA,Adr,Cyc,Tax,Tam,IO,TIL,N,BM}; policy observes only modeled states."
 }
